@@ -1,5 +1,4 @@
 #!/usr/bin/python
-
 """
 ################################################################################
 # Copyright (c) 2016 Robert Hill
@@ -8,11 +7,15 @@
 	unique_name_for_copy.py
 
 	DESCRIPTION:
-	Will generate a time_stamp based name 
+	Will generate a time_stamp based name.
 
 	HISTORY:
 	02/11/16 -RH
 	Initial creation
+
+	06/09/17 -RH
+	Added function to rename files in a target directory. This is for
+	items that are already imported and just need renaming.
 
 ################################################################################
 """
@@ -33,7 +36,7 @@ logger1.setFormatter(formatter)
 log.addHandler(logger1)
 
 ################################################################################
-# Classes
+# CLASSES
 ################################################################################
 
 class ExecutePlan(object):
@@ -42,8 +45,11 @@ class ExecutePlan(object):
 		self.source_files = None
 
 	def run(self):
-		# Check args
-		if (self.args.source == "source" or self.args.dest == "dest"):
+		if (self.args.inplace):
+			if (self.args.source == "source"):
+				self.usage()
+				sys.exit(0)
+		elif (self.args.source == "source" or self.args.dest == "dest"):
 			self.usage()
 			sys.exit(0)
 
@@ -51,61 +57,127 @@ class ExecutePlan(object):
 		self.source_files = os.listdir(self.args.source)
 		log.debug("ExecutePlan:run: self.source_files eq {0}".format(self.source_files))
 
-		ut = MoveCameraFiles(self.args,self.source_files)
-		ut.is_mov_file()
-		ut.get_mov_count()
-		if (ut.items_count > 0):
+		items_count = len(self.source_files)
+		if (self.args.inplace and items_count > 0):
+			rcf = RenameCameraFiles(self.args,self.source_files)
+			rcf.rename_camera_file()
+		elif (items_count > 0):
+			ut = MoveCameraFiles(self.args,self.source_files)
 			ut.move_files_with_final_name()
 
 	def usage(self):
-		print("Script to injest mov files from a camera card and copy them with a file name")
-		print("<required> '-s' or '--source' The path to the source mov files")
-		print("<required> '-d' or '--dest' The path to the destination folder")
+		if (self.args.inplace):
+			print("Script to injest mov files from a camera card and copy them with a file name")
+			print("<required> '-s' or '--source' The path to the source mov files")
+		else:
+			print("Script to injest mov files from a camera card and copy them with a file name")
+			print("<required> '-s' or '--source' The path to the source mov files")
+			print("<required> '-d' or '--dest' The path to the destination folder")
 
 
-
-class MoveCameraFiles(object):
-	def __init__(self,args,source_file):
+class CameraFile(object):
+	"""
+	CameraFile -- A class that will validate if a file is supported or not and add
+			the files to a property list
+	"""
+	def __init__(self,source_files):
 		self.args = args
-		self.source_files = source_file
-		self.mov_list = []
-		self.items_count = None
+		self.source_files = source_files
+		self._movie_file = []
+
+	# PROPERTIES
+	@property
+	def movie_files(self):
+		return self._movie_file
+
+	@movie_files.setter
+	def movie_files(self, movie_file):
+		self._movie_file.append(movie_file)
+		return self._movie_file
 
 	def is_mov_file(self):
-		# Validate each file is a .mov file, and append to the list
+		# Call before using the property getter for movie_files
 		for i in self.source_files:
 			# Drift camera
 			if not i.endswith("_thm.mp4") and i.endswith(".mp4"):
-				self.mov_list.append(i)
-				log.debug("MoveCameraFiles:is_mov_file: appended to self.mov_list {0}".format(i))
+				log.debug("MoveCameraFiles:is_mov_file: mp4 {0}".format(i))
+				self.movie_files = i
 			# Bullet HD Camera for motorcycle
-			if i.endswith(".MOV"):
-				self.mov_list.append(i)
-				log.debug("MoveCameraFiles:is_mov_file: appended to self.mov_list {0}".format(i))
+			elif i.endswith(".MOV"):
+				log.debug("MoveCameraFiles:is_mov_file: .MOV {0}".format(i))
+				self.movie_files = i
 			# GoPro 4
-			if i.endswith(".MP4"):
-				self.mov_list.append(i)
-				log.debug("MoveCameraFiles:is_mov_file: appended to self.mov_list {0}".format(i))
+			elif i.endswith(".MP4"):
+				log.debug("MoveCameraFiles:is_mov_file: .MP4 {0}".format(i))
+				self.movie_files = i
 
-	def get_mov_count(self):
-		# Get the number of items we will work on
-		try:
-			self.items_count = len(self.mov_list)
-			log.debug("MoveCameraFiles:get_mov_count: count is {0}".format(self.items_count))
-		except:
-			log.debug("MoveCameraFiles:get_mov_count: count is None")
+	@staticmethod	
+	def format_date_time(the_ctime):
+		# Get the create time for the files in the mov_list
+		my_date_time = datetime.datetime.strptime(the_ctime, "%a %b %d %H:%M:%S %Y")
+		my_format = "%m%d%Y_%H%M%S"
+		my_final_date_time = my_date_time.strftime(my_format)
+		my_final_formatted = "{0}.mp4".format(my_final_date_time)
+		log.debug("MoveCameraFiles:format_date_time: final formatted time is {0}".format(my_final_formatted))
+		return(my_final_formatted)
 
-	def move_files_with_final_name(self):
-		# Move the files to the destination
-		current_count = self.items_count
-		print("Working on {0} files".format(self.items_count))
+class RenameCameraFiles(object):
+	"""
+	RenameCameraFiles -- A class to rename the files instead of copy
+	"""
+	def __init__(self,args,source_files):
+		self.args = args
+		self.source_files = source_files
 
-		# itterate over the mov list
-		for i in self.mov_list:
+	def rename_camera_file(self):
+		cf = CameraFile(self.source_files)
+
+		# Creates the list of movie files from the source files list
+		cf.is_mov_file()
+
+		original_count = len(cf.movie_files)
+		current_count = original_count
+		print("Working on {0} files".format(original_count))
+
+		for i in cf.movie_files:
 			os.chdir(self.args.source)
 			my_date_time = time.ctime(os.path.getctime(i))
-			log.debug("MoveCameraFiles:move_files_with_final_name: my_date_time {0}".format(my_date_time))
-			formatted_time = self.format_date_time(my_date_time)
+			formatted_time = cf.format_date_time(my_date_time)
+			log.debug("MoveCameraFiles:formatted_time:  {0}".format(formatted_time))
+
+			print("\nWorking on {0} of {1}.".format(current_count,original_count))
+			print("Will rename file from {0} to {1}".format(i,formatted_time))
+
+			os.rename(i, formatted_time)
+			current_count -= 1
+
+class MoveCameraFiles(object):
+	"""
+	MoveCameraFiles -- A class to copy and name the file 
+	"""
+	def __init__(self,args,source_files):
+		self.args = args
+		self.source_files = source_files
+		self.mov_list = []
+
+	def move_files_with_final_name(self):
+		cf = CameraFile(self.source_files)
+
+		# Creates the list of movie files from the source files list
+		cf.is_mov_file()
+
+		original_count = len(cf.movie_files)
+		current_count = original_count
+		print("Working on {0} files".format(original_count))
+
+		# Change dir to source folder
+		os.chdir(self.args.source)
+
+		# itterate over the mov list
+		for i in cf.movie_files:
+			my_date_time = time.ctime(os.path.getctime(i))
+			formatted_time = cf.format_date_time(my_date_time)
+			log.debug("MoveCameraFiles:formatted_time:  {0}".format(formatted_time))
 
 			# Ditto results to final destination
 			my_ditto_cmd = "/usr/bin/ditto '{0}/{1}' '{2}/{3}'".format(self.args.source,i,self.args.dest,formatted_time)
@@ -120,10 +192,12 @@ class MoveCameraFiles(object):
 				print("Duplicate destination file found {0}, skipping!".format(my_dest_path))
 			else:
 				# Execute the copy
-				print("\nWorking on {0}, item {1} of {2}.".format(i,current_count,self.items_count))
+				print("\nWorking on {0}, item {1} of {2}.".format(i,current_count,original_count))
 				print("Will save file as {0} in destination {1}.".format(formatted_time,self.args.dest))
 				current_count -= 1 
 				self.execute_cmd(my_ditto_cmd)
+
+	# Add a remove sources command at some point
 
 	def execute_cmd(self,cmd,terminal=None):
 		try:
@@ -142,17 +216,6 @@ class MoveCameraFiles(object):
 
 		return(stdout,sterr)
 
-	@staticmethod	
-	def format_date_time(the_ctime):
-		# Get the create time for the files in the mov_list
-		my_date_time = datetime.datetime.strptime(the_ctime, "%a %b %d %H:%M:%S %Y")
-		log.debug("MoveCameraFiles:format_date_time: time is {0}".format(my_date_time))
-		my_format = "%m%d%Y_%H%M%S"
-		my_final_date_time = my_date_time.strftime(my_format)
-		log.debug("MoveCameraFiles:format_date_time: formatted time is {0}".format(my_final_date_time))
-		my_final_formatted = "{0}.mp4".format(my_final_date_time)
-		log.debug("MoveCameraFiles:format_date_time: final formatted time is {0}".format(my_final_formatted))
-		return(my_final_formatted)
 
 ################################################################################
 # RUN AS A SCRIPT
@@ -164,6 +227,7 @@ if __name__ == "__main__":
 
 	parser.add_argument('-s', '--source',	default="source", help = "The path to the source mov files")
 	parser.add_argument('-d', '--dest',	default="dest", help = "The path to the destination folder")
+	parser.add_argument('-p', '--inplace',	action="store_true", help = "Change the files in place, this is for an already imported item you just want to change the name of")
 	args = parser.parse_args()
 
 	ExecutePlan(args).run()
